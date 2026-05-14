@@ -1,0 +1,98 @@
+---
+title: "Analysis Script for Social and Cultural Dynamics 2026"
+author: "Andrea Wiwe Kjær-Hansen, Mikkel Krøjer Svendsen"
+format: html
+---
+
+```{r}
+# Packages
+library(rethinking)
+library(dagitty)
+library(ggdag)
+library(tidyverse)
+
+# Theme settings
+theme_set(theme_minimal())
+
+# data directory
+source("data_dir.R")
+```
+
+```{r}
+# read files helper
+read_files <- function(pattern) {
+  list.files(
+    data_dir,
+    pattern = pattern,
+    full.names = TRUE
+  ) |>
+    map_dfr(~ read.delim2(.x, sep = ","))
+}
+```
+
+```{r}
+# read files
+d_simon <- read_files("simon") |>
+  mutate(
+    rt_ms = as.numeric(ifelse(rt_ms == "", NA, rt_ms)),
+    response_key = ifelse(response_key == "", NA, response_key),
+    side_congruent = (shape == "square" & side == "left") |
+      (shape == "diamond" & side == "right")
+  )
+
+d_tapping <- read_files("tapping")
+
+d_info <- read_files("group_info")
+```
+
+## Descriptive statistics
+
+```{r}
+age <- d_info |>
+  summarize(
+    age_mean = mean(age),
+    age_sd = sd(age)
+  )
+
+gender <- d_info |>
+  count(gender) |>
+  mutate(
+    prop = n / sum(n)
+  )
+
+condition <- d_tapping |>
+  distinct(dyad_id, .keep_all = T) |>
+  count(condition, name = "n_dyads")
+
+print(age)
+print(gender)
+print(condition)
+```
+
+
+```{r}
+d_simon |>
+  group_by(task, side_congruent) |>
+  summarize(
+    rt_mean = mean(rt_ms, na.rm = T)
+  ) |>
+  ggplot(aes(x = side_congruent, y = rt_mean, color = task, group = task)) +
+  geom_point(size = 3) +
+  geom_line() +
+  scale_x_discrete(labels = c("Incongruent", "Congruent")) +
+  labs(
+    x = "Stimulus Side",
+    y = "Mean RT (ms)",
+    color = "Task",
+    title = "Simon Effect by Task Condition"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+d_simon |>
+  group_by(task, side_congruent) |>
+  summarize(
+    rt_mean = mean(rt_ms, na.rm = T)
+  )
+```

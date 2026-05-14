@@ -1,0 +1,1 @@
+data_dir <- "C:\\Users\\Mikke\\Proton Drive\\mikkelks\\My files\\cognitive_science\\4sem\\socialculturaldynamics\\Exam\\data\\"
