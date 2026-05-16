@@ -4,12 +4,15 @@ author: "Andrea Wiwe Kjær-Hansen, Mikkel Krøjer Svendsen"
 format: html
 ---
 
-```{r}
+# Data and R setup
+
+```{r, message=FALSE}
 # Packages
 library(rethinking)
 library(dagitty)
 library(ggdag)
 library(tidyverse)
+library(lmerTest)
 
 # Theme settings
 theme_set(theme_minimal())
@@ -45,8 +48,8 @@ d_tapping <- read_files("tapping")
 d_info <- read_files("group_info")
 ```
 
-## Descriptive statistics
-
+# Descriptive statistics and data cleaning
+## Participants
 ```{r}
 age <- d_info |>
   summarize(
@@ -69,30 +72,305 @@ print(gender)
 print(condition)
 ```
 
+## Calculating the Social Simon Effect (SSE)
+
+What is the SSE? In the joint go/no-go Simon task, each participant only responds to one shape. 
+
+The Simon Effect shouldn't exist individually. BUT it often does appear as if participants mentally represent their partner's role. 
+
+So, the SSE: Faster/more accurate responses when the stimulus appears on your response-congruent side, even though congruence is only meaningful relative to the dyad.
+
+$$\text{SSE} = \text{RT}_{\text{congruent}} − \text{RT}_{\text{incongruent}}$$
+
+First, add condition column to data
 
 ```{r}
-d_simon |>
-  group_by(task, side_congruent) |>
-  summarize(
-    rt_mean = mean(rt_ms, na.rm = T)
+# add condition to d_simon
+d_simon <- d_simon |>
+  left_join(d_tapping |> distinct(dyad_id, condition), by = "dyad_id")
+
+str(d_simon)
+```
+
+We only look at joint trials that are correct go trials (`responded == 1` and `correct == 1`)
+
+```{r}
+d_joint <- d_simon |>
+  filter(task == "joint" & responded == 1 & correct == 1) |>
+  mutate(participant_id = paste(dyad_id, participant, sep = "_"))
+
+str(d_joint)
+```
+
+We can condition on condition and side congruence:
+```{r}
+d_joint |>
+  count(participant_id, side, side_congruent)
+```
+
+We can also collapse to one SSE value per dyad (throwing away a lot of information in the process...)
+
+```{r}
+dyad_sse <- d_joint |>
+  group_by(dyad_id, condition, side_congruent) |>
+  summarise(mean_rt = mean(rt_ms), .groups = "drop") |>
+  pivot_wider(names_from = side_congruent, values_from = mean_rt) |>
+  mutate(SSE = `FALSE` - `TRUE`)
+
+dyad_sse
+```
+
+Summarizing condition and side congruence
+```{r}
+d_joint |>
+  group_by(condition, side_congruent) |>
+  summarise(
+    mean_rt = mean(rt_ms),
+    sd_rt = sd(rt_ms),
+    n = n(),
+    .groups = "drop"
+  )
+```
+
+Summarizing condition
+```{r}
+d_joint |>
+  group_by(condition, side_congruent) |>
+  summarise(mean_rt = mean(rt_ms), .groups = "drop") |>
+  pivot_wider(names_from = side_congruent, values_from = mean_rt) |>
+  mutate(SSE = `FALSE` - `TRUE`)
+```
+
+Huh, synchrony dyads have lower SSE than asynchrony dyads. This seems to go against theoretical expectation...
+
+## Visualizations
+RT distributions (overlaid)
+```{r}
+d_joint |>
+  mutate(
+    side_congruent = ifelse(side_congruent, "Congruent", "Incongruent"),
+    condition = str_to_title(condition)
   ) |>
-  ggplot(aes(x = side_congruent, y = rt_mean, color = task, group = task)) +
-  geom_point(size = 3) +
-  geom_line() +
-  scale_x_discrete(labels = c("Incongruent", "Congruent")) +
+  ggplot(aes(x = rt_ms, fill = side_congruent)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(vars(condition)) +
   labs(
-    x = "Stimulus Side",
-    y = "Mean RT (ms)",
-    color = "Task",
-    title = "Simon Effect by Task Condition"
+    x = "Reaction Time (ms)",
+    y = "Density",
+    fill = "Congruence",
+    title = "RT Distributions by Condition and Congruence"
+  )
+```
+RT distributions (faceted)
+```{r}
+d_joint |>
+  mutate(
+    side_congruent = ifelse(side_congruent, "Congruent", "Incongruent"),
+    condition = str_to_title(condition)
+  ) |>
+  ggplot(aes(x = rt_ms, fill = side_congruent)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(vars(side_congruent, condition)) +
+  labs(
+    x = "Reaction Time (ms)",
+    y = "Density",
+    fill = "Congruence",
+    title = "RT Distributions by Condition and Congruence"
+  )
+```
+
+SSE distributions (condition mean and individual dyads)
+```{r}
+dyad_sse |>
+  mutate(condition = str_to_title(condition)) |>
+  ggplot(aes(x = condition, y = SSE, fill = condition)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+  geom_boxplot(alpha = 0.5) +
+  geom_jitter(width = 0.05, size = 3, alpha = .5) +
+  labs(
+    x     = "Condition",
+    y     = "Social Simon Effect (ms)\n[Incongruent − Congruent RT]",
+    title = "SSE per Dyad by Condition"
+  ) +
+  theme(legend.position = "none")
+```
+
+Congruence effect per dyad by condition
+```{r}
+d_joint |>
+  group_by(dyad_id, condition, side_congruent) |>
+  summarise(mean_rt = mean(rt_ms), .groups = "drop") |>
+  mutate(
+    side_congruent = ifelse(side_congruent, "Congruent", "Incongruent"),
+    condition      = str_to_title(condition)
+  ) |>
+  ggplot(aes(x = side_congruent, y = mean_rt,
+             group = dyad_id, colour = factor(dyad_id))) +
+  geom_line() +
+  geom_point(size = 3) +
+  facet_wrap(~ condition) +
+  labs(
+    x      = "",
+    y      = "Mean RT (ms)",
+    colour = "Dyad",
+    title  = "Congruence Effect per Dyad by Condition"
+  )
+```
+
+# Analysis
+## Simple t-test
+First, we can do a t-test. Since this is a between-dyad experiment, we assume the two conditions to be independent. We use Welch's test as it does not assume equal variances across groups.
+```{r}
+t.test(SSE ~ condition, data = dyad_sse)
+```
+
+The difference between conditions is trivially small. But it's worth noting that it goes against our expectations: Asynchrony condition dyads show a larger SSE than the synchrony condition dyads.
+
+## Multilevel model
+Beefing our analysis up, we can do a multilevel model to account for variances at different levels of our experiment.  
+
+First, we fit this model:
+- Outcome: Trial-level RT  
+- Fixed effects: Congruence, condition, and their interaction  
+- Random effects: Dyad and participant  
+```{r}
+m1 <- lmer(
+  rt_ms ~ side_congruent * condition + (1 | dyad_id) + (1 | participant_id),
+  data = d_joint
+)
+
+summary(m1)
+```
+
+The fit is singular, i.e., the model cannot distinguish between dyad-level and participant_level variances. This makes sense since we only have two participants in each dyad, and they always have the same role (pressing either the `Z` or `M` key).  
+
+We try a new model using only dyad-level variances as random effects.
+
+```{r}
+m2 <- lmer(
+  rt_ms ~ side_congruent * condition + (1 | dyad_id),
+  data = d_joint
+)
+
+summary(m2)
+```
+
+## Bayesian model
+We mirror the frequentist `m2` in structure. First, we define the data list. Note the standardization of RTs.
+```{r}
+dat <- d_joint |>
+  mutate(
+    cong = as.integer(side_congruent), # 0 = incongruent, 1 = congruent
+    cond = as.integer(condition == "synchrony"), # 0 = async, 1 = sync
+    dyad = as.integer(factor(dyad_id)),
+    rt_z = (rt_ms - mean(rt_ms)) / sd(rt_ms) # standardise RT
+  ) |>
+  select(rt_z, cong, cond, dyad) |>
+  as.list()
+
+dat$N_dyads <- max(dat$dyad)
+```
+
+We then fit and save the model:
+
+```{r}
+# m_bayes <- ulam(
+#   alist(
+#     # Likelihood
+#     rt_z ~ normal(mu, sigma),
+# 
+#     # Linear model
+#     mu <- a +
+#       b_cong * cong +
+#       b_cond * cond +
+#       b_interaction * cong * cond +
+#       a_dyad[dyad],
+# 
+#     # Fixed effect priors
+#     a ~ normal(0, 1),
+#     b_cong ~ normal(0, 0.5), # expect small congruence effect
+#     b_cond ~ normal(0, 0.5), # expect small condition effect
+#     b_interaction ~ normal(0, 0.5), # our hypothesis
+# 
+#     # Dyad-level random intercepts
+#     a_dyad[dyad] ~ normal(0, sigma_dyad),
+#     sigma_dyad ~ exponential(1),
+# 
+#     # Residual sd
+#     sigma ~ exponential(1)
+#   ),
+#   data = dat,
+#   chains = 4,
+#   cores = 4,
+#   log_lik = T # remember to set to TRUE if model comparison later
+# )
+# 
+# post <- extract.samples(m_bayes, n = 10000)
+# prior <- extract.prior(m_bayes, n = 10000)
+# 
+# saveRDS(m_bayes, file = "model_and_samples/m_bayes.rds")
+# saveRDS(post,  file = "model_and_samples/post_samples.rds")
+# saveRDS(prior,  file = "model_and_samples/prior_samples.rds")
+```
+
+
+```{r}
+m_bayes <- readRDS("model_and_samples/m_bayes.rds")
+post    <- readRDS("model_and_samples/post_samples.rds")
+prior   <- readRDS("model_and_samples/prior_samples.rds")
+```
+
+We do a prior predictive check:
+```{r}
+dens(prior$b_interaction, show.zero = T, show.HPDI = .89, main = "Prior of Interaction Effect")
+```
+
+Notice that the prior straddles 0. This is fine, as we find both positive and negative effects plausible a priori.
+
+Assessing chain health
+```{r}
+trankplot(m_bayes, pars = c("b_interaction"))
+```
+They look fine.
+
+Now, we inspect our model. 
+
+First, we're interested in `b_interaction`. We predict it to be negative (i.e., congruent trials are faster, and this advantage is strongest in synchrony dyads).
+```{r}
+precis(m_bayes)
+```
+
+Going from async to sync seems to be associated with .18 decrease in RT (but CI straddles 0).
+`b_interaction` is slightly positive (.07) but also straddles 0.
+
+The posterior of the interaction term (b_interaction) was centred near zero (mean ca. 0, 89 % CI: [-.14, .27]). This indicates no credible evidence that the Social Simon Effect differed between synchrony and asynchrony conditions. The posterior was substantially narrower than the prior which suggests that the data was informative but did not shift meaningfully away from zero in either direction.
+
+```{r}
+dens(post$b_interaction, xlab = "b_interaction", show.zero = TRUE,  show.HPDI = .89, main = "Interaction Effect")
+```
+
+Plotting prior vs posterior
+```{r}
+data.frame(
+  value = c(prior$b_interaction, post$b_interaction),
+  Distribution = c(
+    rep("Prior",     length(prior$b_interaction)),
+    rep("Posterior", length(post$b_interaction))
+  )
+) |>
+  ggplot(aes(x = value, fill = Distribution, colour = Distribution)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+  scale_fill_manual(values   = c("Prior" = "forestgreen", 
+                                 "Posterior" = "steelblue")) +
+  scale_colour_manual(values = c("Prior" = "forestgreen", 
+                                 "Posterior" = "steelblue")) +
+  labs(
+    x     = "b_interaction",
+    y     = "Density",
+    title = "Prior vs Posterior of Interaction Effect"
   ) +
   theme_minimal()
 ```
 
-```{r}
-d_simon |>
-  group_by(task, side_congruent) |>
-  summarize(
-    rt_mean = mean(rt_ms, na.rm = T)
-  )
-```
+So what have we learned? Well, we weren't sure which way the effect was going to go (or even if it was going to go at all). It seems like it isn't going to go at all. And if it is, we still don't know which way. This is a fun exam.
