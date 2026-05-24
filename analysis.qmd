@@ -4,13 +4,12 @@ author: "Andrea Wiwe Kjær-Hansen, Mikkel Krøjer Svendsen"
 format: html
 ---
 
-# Data and R setup
+# R setup
 
 ```{r, message=FALSE}
 # Packages
 library(rethinking)
-# library(dagitty)
-# library(ggdag)
+library(dagitty)
 library(tidyverse)
 library(lmerTest)
 
@@ -20,6 +19,63 @@ theme_set(theme_minimal())
 # data directory
 source("data_dir.R")
 ```
+
+# DAG
+
+```{r}
+dag <- dagitty(
+  'dag {
+  synchrony_condition [exposure]
+  rt [outcome]
+  co_representation [latent]
+
+  synchrony_condition -> co_representation
+  synchrony_condition -> rt
+
+  co_representation -> rt
+
+  congruency -> rt
+  task_type -> rt
+  task_type -> co_representation
+
+  trial_order -> rt
+  participant -> rt
+}'
+)
+
+coordinates(dag) <- list(
+  x = c(
+    synchrony_condition = 1,
+    task_type = 1,
+    congruency = 1,
+    co_representation = 3,
+    rt = 5,
+    trial_order = 4,
+    participant = 4
+  ),
+  y = c(
+    synchrony_condition = 3,
+    task_type = 5,
+    congruency = 1,
+    co_representation = 3,
+    rt = 3,
+    trial_order = 1,
+    participant = 5
+  )
+)
+
+plot(dag)
+```
+```{r}
+# What do we need to adjust for to identify the effect of synchrony on RT?
+adjustmentSets(dag, exposure = "synchrony_condition", outcome = "rt")
+
+# Are there any testable implications (conditional independencies)?
+impliedConditionalIndependencies(dag)
+```
+
+
+# Reading files
 
 ```{r}
 # read files helper
@@ -95,7 +151,7 @@ d_simon <- d_simon |>
 str(d_simon)
 ```
 
-We only look at joint trials that are correct go trials (`responded == 1` and `correct == 1`)
+We only look at trials that are correct go trials (`responded == 1` and `correct == 1`)
 
 ```{r}
 d_joint <- d_simon |>
@@ -660,6 +716,124 @@ data.frame(value = delta_post) |>
 
 ```{r}
 plot(compare(mb1, mb2))
+```
+### Model 2.1 - NDT
+#### Data
+```{r}
+# Subtract non-decision time before passing to ulam
+# 150ms is a standard lower bound for simple RT tasks
+dat$rt_shifted <- dat$rt - 150
+```
+
+#### Prior predictive
+```{r}
+mb2_1_prior <- ulam(
+  alist(
+    rt_shifted ~ dlnorm(mu, sigma),
+    mu <- a +
+          b_cong        * cong +
+          b_cond        * cond +
+          b_interaction * cong * cond +
+          a_dyad[dyad],
+
+    a             ~ dnorm(5.7, 0.3),
+    b_cong        ~ dnorm(0, 0.2),
+    b_cond        ~ dnorm(0, 0.2),
+    b_interaction ~ dnorm(0, 0.2),
+
+    a_dyad[dyad]  ~ dnorm(0, sigma_dyad),
+    sigma_dyad    ~ dexp(5),
+    sigma         ~ dexp(1)
+  ),
+  data    = dat,
+  chains  = 4,
+  cores   = 4,
+  iter    = 2000,
+  sample_prior = TRUE
+)
+
+prior <- extract.prior(mb2_1_prior, n = 10000)
+saveRDS(mb2_1_prior, file = "model_and_samples/mb2_1_prior_model.rds")
+saveRDS(prior, file = "model_and_samples/mb2_1_prior.rds")
+```
+
+```{r}
+# Simulate RT predictions from prior
+rt_prior_pred <- rlnorm(1000, mean(prior$a), mean(prior$sigma)) + 150
+
+dens(rt_prior_pred, 
+     xlab = "RT (ms)", 
+     main = "Prior Predictive Check: mb2_1")
+abline(v = c(150, 1500), lty = 2, col = "grey50")  # plausible RT bounds
+```
+
+#### Model fit
+```{r}
+mb2_1 <- ulam(
+  alist(
+    rt_shifted ~ dlnorm(mu, sigma),
+    mu <- a +
+          b_cong        * cong +
+          b_cond        * cond +
+          b_interaction * cong * cond +
+          a_dyad[dyad],
+
+    # Intercept prior adjusted downward: exp(5.7) ≈ 298ms 
+    # (i.e. 150ms already subtracted from ~450ms typical RT)
+    a             ~ dnorm(5.7, 0.3),
+    b_cong        ~ dnorm(0, 0.2),
+    b_cond        ~ dnorm(0, 0.2),
+    b_interaction ~ dnorm(0, 0.2),
+
+    a_dyad[dyad]  ~ dnorm(0, sigma_dyad),
+    sigma_dyad    ~ dexp(5),
+    sigma         ~ dexp(1)
+  ),
+  data    = dat,
+  chains  = 4,
+  cores   = 4,
+  iter    = 2000,
+  log_lik = TRUE
+)
+
+post <- extract.samples(mb2_1, n = 10000)
+saveRDS(mb2_1,  file = "model_and_samples/mb2_1.rds")
+saveRDS(post, file = "model_and_samples/mb2_1_post.rds")
+```
+
+```{r}
+# Simulate predicted RTs (add 150ms back)
+rt_pred <- sapply(1:100, function(i) {
+  rlnorm(length(dat$rt_shifted), post$a[i], post$sigma[i]) + 150
+})
+
+# Plot
+dens(dat$rt, col = "black", lwd = 2,
+     xlab = "RT (ms)", main = "Posterior Predictive Check: mb2_1")
+for(i in 1:100) dens(rt_pred[, i], add = TRUE, col = col.alpha("steelblue", 0.2))
+```
+
+```{r}
+data.frame(
+  value = c(prior$b_interaction, post$b_interaction),
+  Distribution = c(
+    rep("Prior", length(prior$b_interaction)),
+    rep("Posterior", length(post$b_interaction))
+  )
+) %>%
+  ggplot(aes(x = value, fill = Distribution, colour = Distribution)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+  scale_fill_manual(values   = c("Prior" = "forestgreen",
+                                 "Posterior" = "steelblue")) +
+  scale_colour_manual(values = c("Prior" = "forestgreen",
+                                 "Posterior" = "steelblue")) +
+  labs(
+    x     = "b_interaction",
+    y     = "Density",
+    title = "Prior vs Posterior of Interaction Effect: mb4"
+  ) +
+  theme_minimal()
 ```
 
 ### Model 3 - varying slopes on congruence
