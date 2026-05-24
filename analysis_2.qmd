@@ -9,12 +9,16 @@ format: html
 ```{r, message=FALSE}
 # Packages
 library(rethinking)
+library(patchwork)
 library(dagitty)
 library(tidyverse)
-library(lmerTest)
 
 # Theme settings
 theme_set(theme_minimal())
+color1 <- "steelblue"
+color2 <- "tomato"
+color3 <- "mediumpurple"
+
 
 # data directory
 source("data_dir.R")
@@ -74,7 +78,6 @@ adjustmentSets(dag, exposure = "synchrony_condition", outcome = "rt")
 impliedConditionalIndependencies(dag)
 ```
 
-
 # Reading files
 
 ```{r}
@@ -103,7 +106,7 @@ d_tapping <- read_files("tapping")
 
 d_info <- read_files("group_info") |> 
   mutate(
-    gender = ifelse(dyad_id == 4 & participant == 2, "Male", gender)
+    gender = ifelse(dyad_id == 4 & participant == 2, "Male", gender) # one participant entered wrong gender
   )
 ```
 
@@ -133,16 +136,11 @@ print(condition)
 
 ## Calculating the Social Simon Effect (SSE)
 
-What is the SSE? In the joint go/no-go Simon task, each participant only responds to one shape. 
-
-The Simon Effect shouldn't exist individually. BUT it often does appear as if participants mentally represent their partner's role. 
-
-So, the SSE: Faster/more accurate responses when the stimulus appears on your response-congruent side, even though congruence is only meaningful relative to the dyad.
+So, the SSE: Faster/more accurate responses when the stimulus appears on your response-congruent side, even though congruence is only meaningful relative to the individual joint task.
 
 $$\text{SSE} = \text{RT}_{\text{congruent}} − \text{RT}_{\text{incongruent}}$$
 
 First, add condition column to data
-
 ```{r}
 # add condition to d_simon
 d_simon <- d_simon |>
@@ -151,8 +149,7 @@ d_simon <- d_simon |>
 str(d_simon)
 ```
 
-We only look at trials that are correct go trials (`responded == 1` and `correct == 1`)
-
+We only look at correct go trials (`responded == 1` and `correct == 1`). We filter out the non-response participant from each trial.
 ```{r}
 d <- d_simon |>
   filter(responded == 1 & correct == 1) |>
@@ -206,89 +203,112 @@ SSE *is* slightly larger for sync than async, though not by a lot.
 
 This table gives one SSE value per synchrony condition. Maybe good for reporting?
 
-## Visualizations - OLD, PLEASE REVISE!
-RT distributions (overlaid)
+## Visualizations
+### RT distributions by condition x task type x congruency
 ```{r}
-d_joint |>
+d |>
   mutate(
-    side_congruent = ifelse(side_congruent, "Congruent", "Incongruent"),
-    condition = str_to_title(condition)
+    task = factor(
+      task,
+      levels = c("individual", "joint"),
+      labels = c("Individual", "Joint")
+    ),
+    congruency = factor(
+      side_congruent,
+      levels = c(FALSE, TRUE),
+      labels = c("Incongruent", "Congruent")
+    ),
+    condition = factor(
+      condition,
+      levels = c("asynchrony", "synchrony"),
+      labels = c("Asynchrony", "Synchrony")
+    )
   ) |>
-  ggplot(aes(x = rt_ms, fill = side_congruent)) +
-  geom_density(alpha = 0.5) +
-  facet_wrap(vars(condition)) +
+  filter(rt_ms < 2000) |>
+  ggplot(aes(x = rt_ms, fill = congruency)) +
+  geom_density(alpha = .5) +
+  facet_grid(condition ~ task) +
+  scale_fill_manual(values = c(color1, color2)) +
   labs(
-    x = "Reaction Time (ms)",
+    title = "RT distributions by condition, task type, and congruency",
+    x = "RT (ms)",
     y = "Density",
-    fill = "Congruence",
-    title = "RT Distributions by Condition and Congruence"
-  )
-```
-RT distributions (faceted)
-```{r}
-d_joint |>
-  mutate(
-    side_congruent = ifelse(side_congruent, "Congruent", "Incongruent"),
-    condition = str_to_title(condition)
-  ) |>
-  ggplot(aes(x = rt_ms, fill = side_congruent)) +
-  geom_density(alpha = 0.5) +
-  facet_wrap(vars(side_congruent, condition)) +
-  labs(
-    x = "Reaction Time (ms)",
-    y = "Density",
-    fill = "Congruence",
-    title = "RT Distributions by Condition and Congruence"
+    fill = ""
   )
 ```
 
-SSE distributions (condition mean and individual dyads)
+SSE is slightly visible in the asynchrony/joint cell but not elsewhere... maybe in synchrony/joint but very noisy.  
+
+Individual (go/no-go) task panels show minimal congruency separation in both conditions which is expected. The congruency manipulation is only meaningful in the joint context.  
+
+So, data appear to show a reduced or reversed SSE in the synchrony condition relative to asynchrony contrary to expectation?  
+
+### Individual dyad trajectories 
 ```{r}
-dyad_sse |>
-  mutate(condition = str_to_title(condition)) |>
-  ggplot(aes(x = condition, y = SSE, fill = condition)) +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
-  geom_boxplot(alpha = 0.5) +
-  geom_jitter(width = 0.05, size = 3, alpha = .5) +
-  labs(
-    x = "Condition",
-    y = "Social Simon Effect (ms)\n[Incongruent − Congruent RT]",
-    title = "SSE per Dyad by Condition"
-  ) +
-  theme(legend.position = "none")
+sse_plot_data <- d |>
+  group_by(condition, task, dyad_id, side_congruent) |>
+  summarise(mean_rt = mean(rt_ms, na.rm = TRUE), .groups = "drop") |>
+  pivot_wider(names_from = side_congruent, values_from = mean_rt) |>
+  rename(incongruent = `FALSE`, congruent_rt = `TRUE`) |>
+  mutate(
+    sse = incongruent - congruent_rt,
+    task = factor(
+      task,
+      levels = c("individual", "joint"),
+      labels = c("Individual", "Joint")
+    ),
+    condition = factor(
+      condition,
+      levels = c("asynchrony", "synchrony"),
+      labels = c("Asynchrony", "Synchrony")
+    )
+  )
 ```
 
-Congruence effect per dyad by condition
 ```{r}
-d_joint |>
-  group_by(dyad_id, condition, side_congruent) |>
-  summarise(mean_rt = mean(rt_ms), .groups = "drop") |>
-  mutate(
-    side_congruent = ifelse(side_congruent, "Congruent", "Incongruent"),
-    condition = str_to_title(condition)
-  ) |>
+sse_plot_data |>
   ggplot(aes(
-    x = side_congruent,
-    y = mean_rt,
-    group = dyad_id,
-    colour = factor(dyad_id)
+    x = task,
+    y = sse,
+    colour = condition,
+    group = interaction(dyad_id, condition)
   )) +
-  geom_line() +
-  geom_point(size = 3) +
-  facet_wrap(~condition) +
+  geom_line(alpha = .4, position = position_dodge(.2)) +
+  geom_point(alpha = .4, position = position_dodge(.2)) +
+  stat_summary(
+    aes(group = condition),
+    fun = mean,
+    geom = "line",
+    linewidth = 1.2,
+    position = position_dodge(.2)
+  ) +
+  stat_summary(
+    aes(group = condition),
+    fun = mean,
+    geom = "point",
+    size = 3,
+    position = position_dodge(.2)
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50") +
+  scale_colour_manual(values = c(color1, color2)) +
   labs(
-    x = "",
-    y = "Mean RT (ms)",
-    colour = "Dyad",
-    title = "Congruence Effect per Dyad by Condition"
+    title = "Congruency effect per dyad by task type and synchrony condition",
+    subtitle = "Thin lines: individual dyads. Thick lines: group mean.",
+    x = "Task type",
+    y = "Congruency effect (ms)\nIncongruent - Congruent",
+    colour = ""
   )
 ```
+
+Individual task variance. Some show positive congruency effects, some negative. This is expected noise.  
+
+The joint task is more consistent. Nearly all dyads show positive congruency effects in the joint task. We're replicating the SSE reliably, nice. 
 
 # Analysis
 ## Model 0 - intercept only
 ### Data
 ```{r}
-d_model <- d |>
+d <- d |>
   mutate(
     congruent = as.integer(side_congruent), # 0 = incongruent, 1 = congruent
     joint = as.integer(task == "joint"), # 0 = individual, 1 = joint
@@ -298,38 +318,35 @@ d_model <- d |>
   )
 
 dat <- list(
-  rt = d_model$rt_ms,
-  congruent = d_model$congruent,
-  joint = d_model$joint,
-  sync = d_model$sync,
-  dyad = d_model$dyad_id,
-  pid = d_model$participant_id
+  rt = d$rt_ms,
+  congruent = d$congruent,
+  joint = d$joint,
+  sync = d$sync,
+  dyad = d$dyad_id,
+  pid = d$participant_id
 )
 ```
 
 ### Prior predictive
-For a lognormal: if log(RT) ~ Normal(mu, sigma) then RT is in ms. Typical RT ~400ms, so log(400) ≈ 6.0. We want priors that produce plausible RT distributions.
-
 ```{r}
 n_samples <- 2000
-prior_mu <- rnorm(n_samples, mean = 6, sd = .5)
-prior_sigma <- rexp(n_samples, rate = 1)
+prior_mu <- rnorm(n_samples, mean = 6.1, sd = .2)
+prior_sigma <- rexp(n_samples, rate = 3)
 prior_rt <- rlnorm(n_samples, meanlog = prior_mu, sdlog = prior_sigma)
 
 # Plot
 tibble(rt = prior_rt) |>
   filter(rt < 5000) |> # trim extreme tails for visualisation
   ggplot(aes(x = rt)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = c(150, 1800), linetype = "dashed", colour = "red") +
   labs(
-    title = "Prior predictive check — Model 0",
-    subtitle = "Red dashed lines: plausible RT range (150–1800 ms)",
+    title = "Prior predictive check - Model 0",
+    subtitle = "Red dashed lines: plausible RT range (150 ms - 1800 ms)",
     x = "RT (ms)",
     y = "Density"
   )
 ```
-
 
 ### Model fit
 ```{r}
@@ -337,8 +354,8 @@ m0 <- ulam(
   alist(
     rt ~ dlnorm(mu, sigma),
     mu <- a,
-    a ~ dnorm(6, .5),
-    sigma ~ dexp(1)
+    a ~ dnorm(6.1, .2),
+    sigma ~ dexp(3)
   ),
   data = dat,
   chains = 4,
@@ -355,10 +372,13 @@ trankplot(m0)
 ```{r}
 precis(m0)
 ```
+
 ### Posterior predictive check
 sim() draws from the posterior predictive distribution (includes sigma)
 link() draws mu only. Use sim() here since we want full RT distributions:
 ```{r}
+post0 <- extract.samples(m0)
+
 rt_sim0 <- sim(m0, n = n_samples)
 
 # One simulated RT per observation per posterior draw
@@ -375,20 +395,21 @@ tibble(
 ) |>
   filter(rt < 2000) |>
   ggplot(aes(x = rt, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   labs(
     title = "Posterior predictive check — Model 0",
     x = "RT (ms)", y = "Density", fill = ""
   )
 ```
+
 ### Prior-posterior comparison
 ```{r}
 n_post <- length(post0$a)
 
 prior_post0 <- tibble(
-  prior__a        = rnorm(n_post, 6.0, 0.5),
-  posterior__a    = post0$a,
-  prior__sigma    = rexp(n_post, 1),
+  prior__a = rnorm(n_post, 6.1, .2),
+  posterior__a = post0$a,
+  prior__sigma = rexp(n_post, 3),
   posterior__sigma = post0$sigma
 ) |>
   pivot_longer(everything(),
@@ -406,29 +427,24 @@ prior_post0 |>
   left_join(zoom, by = "parameter") |>
   filter(value >= xmin & value <= xmax) |>
   ggplot(aes(x = value, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   facet_wrap(~ parameter, scales = "free") +
   labs(
-    title = "Prior-posterior comparison — Model 0",
+    title = "Prior-posterior comparison - Model 0",
     x = "", y = "Density", fill = ""
   )
 ```
 
 ## Model 1 - main effects
-### Data
-```{r}
-# still dat
-```
-
 ### Prior predictive
 ```{r}
-n_post <- 2000  # align with 4 chains x 500 draws
+n_post <- 2000
 
-prior_a <- rnorm(n_post, 6.0, 0.5)
-prior_b_cong <- rnorm(n_post, 0, 0.5)
-prior_b_joint <- rnorm(n_post, 0, 0.5)
-prior_b_sync <- rnorm(n_post, 0, 0.5)
-prior_sigma <- rexp(n_post, 1)
+prior_a <- rnorm(n_post, 6.1, .2)
+prior_b_cong <- rnorm(n_post, 0, .05)
+prior_b_joint <- rnorm(n_post, -.05, .05)
+prior_b_sync <- rnorm(n_post, 0, .05)
+prior_sigma <- rexp(n_post, 3)
 
 # Compute prior mu for each combination of predictors (reference cell: 0/0/0)
 prior_mu <- prior_a +
@@ -441,11 +457,11 @@ prior_rt <- rlnorm(n_post, meanlog = prior_mu, sdlog = prior_sigma)
 tibble(rt = prior_rt) |>
   filter(rt < 5000) |>
   ggplot(aes(x = rt)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = c(150, 1800), linetype = "dashed", colour = "red") +
   labs(
-    title = "Prior predictive check — Model 1",
-    subtitle = "Red dashed lines: plausible RT range (150–1800 ms)",
+    title = "Prior predictive check - Model 1",
+    subtitle = "Red dashed lines: plausible RT range (150-1800 ms)",
     x = "RT (ms)",
     y = "Density"
   )
@@ -460,11 +476,11 @@ m1 <- ulam(
       b_cong * congruent +
       b_joint * joint +
       b_sync * sync,
-    a ~ dnorm(6.0, 0.5),
-    b_cong ~ dnorm(0, 0.5),
-    b_joint ~ dnorm(0, 0.5),
-    b_sync ~ dnorm(0, 0.5),
-    sigma ~ dexp(1)
+    a ~ dnorm(6.1, .2),
+    b_cong ~ dnorm(0, .05),
+    b_joint ~ dnorm(-.05, .05),
+    b_sync ~ dnorm(0, .05),
+    sigma ~ dexp(3)
   ),
   data = dat,
   chains = 4,
@@ -479,6 +495,7 @@ precis(m1)
 
 ### Posterior predictive check
 ```{r}
+post1 <- extract.samples(m1)
 rt_sim1 <- sim(m1)
 rt_ppc1 <- as.vector(rt_sim1)
 
@@ -491,7 +508,7 @@ tibble(
 ) |>
   filter(rt < 2000) |>
   ggplot(aes(x = rt, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   labs(
     title = "Posterior predictive check — Model 1",
     x = "RT (ms)",
@@ -505,20 +522,22 @@ tibble(
 n_post <- length(post1$a)
 
 prior_post1 <- tibble(
-  prior__a          = rnorm(n_post, 6.0, 0.5),
-  posterior__a      = post1$a,
-  prior__cong       = rnorm(n_post, 0, 0.5),
-  posterior__cong   = post1$b_cong,
-  prior__joint      = rnorm(n_post, 0, 0.5),
-  posterior__joint  = post1$b_joint,
-  prior__sync       = rnorm(n_post, 0, 0.5),
-  posterior__sync   = post1$b_sync,
-  prior__sigma      = rexp(n_post, 1),
-  posterior__sigma  = post1$sigma
+  prior__a = rnorm(n_post, 6.1, .2),
+  posterior__a = post1$a,
+  prior__cong = rnorm(n_post, 0, .05),
+  posterior__cong = post1$b_cong,
+  prior__joint = rnorm(n_post, -.05, .05),
+  posterior__joint = post1$b_joint,
+  prior__sync = rnorm(n_post, 0, .05),
+  posterior__sync = post1$b_sync,
+  prior__sigma = rexp(n_post, 3),
+  posterior__sigma = post1$sigma
 ) |>
-  pivot_longer(everything(),
-               names_to  = c("source", "parameter"),
-               names_sep = "__")
+  pivot_longer(
+    everything(),
+    names_to = c("source", "parameter"),
+    names_sep = "__"
+  )
 
 zoom1 <- prior_post1 |>
   filter(source == "posterior") |>
@@ -529,10 +548,10 @@ prior_post1 |>
   left_join(zoom1, by = "parameter") |>
   filter(value >= xmin & value <= xmax) |>
   ggplot(aes(x = value, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   facet_wrap(~parameter, scales = "free") +
   labs(
-    title = "Prior-posterior comparison — Model 1",
+    title = "Prior-posterior comparison - Model 1",
     x = "",
     y = "Density",
     fill = ""
@@ -540,27 +559,26 @@ prior_post1 |>
 ```
 
 ## Model 2 - main effects + varying intercepts
-### Data
 ### Prior predictive
 ```{r}
 n_post <- 2000
 
-prior_a         <- rnorm(n_post, 6.0, 0.5)
-prior_b_cong    <- rnorm(n_post, 0, 0.5)
-prior_b_joint   <- rnorm(n_post, 0, 0.5)
-prior_b_sync    <- rnorm(n_post, 0, 0.5)
-prior_sigma     <- rexp(n_post, 1)
-prior_sigma_pid <- rexp(n_post, 1)
-prior_sigma_dyad <- rexp(n_post, 1)
+prior_a <- rnorm(n_post, 6.1, .2)
+prior_b_cong <- rnorm(n_post, 0, .05)
+prior_b_joint <- rnorm(n_post, -.05, 0.05)
+prior_b_sync <- rnorm(n_post, 0, .05)
+prior_sigma <- rexp(n_post, 3)
+prior_sigma_pid <- rexp(n_post, 5)
+prior_sigma_dyad <- rexp(n_post, 5)
 
 # Simulate varying intercepts
-prior_u_pid  <- rnorm(n_post, 0, prior_sigma_pid)
+prior_u_pid <- rnorm(n_post, 0, prior_sigma_pid)
 prior_u_dyad <- rnorm(n_post, 0, prior_sigma_dyad)
 
 prior_mu <- prior_a +
-  prior_b_cong  * 1 +
+  prior_b_cong * 1 +
   prior_b_joint * 1 +
-  prior_b_sync  * 1 +
+  prior_b_sync * 1 +
   prior_u_pid +
   prior_u_dyad
 
@@ -569,14 +587,17 @@ prior_rt <- rlnorm(n_post, meanlog = prior_mu, sdlog = prior_sigma)
 tibble(rt = prior_rt) |>
   filter(rt < 5000) |>
   ggplot(aes(x = rt)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = c(150, 1800), linetype = "dashed", colour = "red") +
   labs(
-    title = "Prior predictive check — Model 2",
-    subtitle = "Red dashed lines: plausible RT range (150–1800 ms)",
-    x = "RT (ms)", y = "Density"
+    title = "Prior predictive check - Model 2",
+    subtitle = "Red dashed lines: plausible RT range (150-1800 ms)",
+    x = "RT (ms)",
+    y = "Density"
   )
 ```
+
+This distribution is wider than m0/m1 if variance components kept at `rexp(3)`: that would make the right tail heavier and push more mass below 150 ms. This is expected since the two random effect terms (`u_pid` and `u_dyad`) each add variance on the log scale. Therefore, we have tightened them to `rexp(5)`. Alternatively, we can accept the wider spread, since `m2` has more sources of variance.
 
 ### Model fit
 ```{r}
@@ -584,28 +605,31 @@ m2 <- ulam(
   alist(
     rt ~ dlnorm(mu, sigma),
     mu <- a +
-      b_cong  * congruent +
+      b_cong * congruent +
       b_joint * joint +
-      b_sync  * sync +
+      b_sync * sync +
       u_pid[pid] +
       u_dyad[dyad],
-    
+
     # Fixed effects
-    a       ~ dnorm(6.0, 0.5),
-    b_cong  ~ dnorm(0, 0.5),
-    b_joint ~ dnorm(0, 0.5),
-    b_sync  ~ dnorm(0, 0.5),
-    
+    a ~ dnorm(6.1, .2),
+    b_cong ~ dnorm(0, .05),
+    b_joint ~ dnorm(-.05, .05),
+    b_sync ~ dnorm(0, .05),
+
     # Varying intercepts
-    u_pid[pid]   ~ dnorm(0, sigma_pid),
+    u_pid[pid] ~ dnorm(0, sigma_pid),
     u_dyad[dyad] ~ dnorm(0, sigma_dyad),
-    
+
     # Scale parameters
-    sigma      ~ dexp(1),
-    sigma_pid  ~ dexp(1),
-    sigma_dyad ~ dexp(1)
+    sigma ~ dexp(3),
+    sigma_pid ~ dexp(5),
+    sigma_dyad ~ dexp(5)
   ),
-  data = dat, chains = 4, cores = 4, log_lik = TRUE
+  data = dat,
+  chains = 4,
+  cores = 4,
+  log_lik = TRUE
 )
 ```
 
@@ -615,20 +639,25 @@ precis(m2)
 
 ### Posterior predictive check
 ```{r}
+post2 <- extract.samples(m2)
 rt_sim2 <- sim(m2)
 rt_ppc2 <- as.vector(rt_sim2)
 
 tibble(
-  rt     = c(dat$rt, rt_ppc2),
-  source = c(rep("Observed", length(dat$rt)),
-             rep("Posterior predictive", length(rt_ppc2)))
+  rt = c(dat$rt, rt_ppc2),
+  source = c(
+    rep("Observed", length(dat$rt)),
+    rep("Posterior predictive", length(rt_ppc2))
+  )
 ) |>
   filter(rt < 2000) |>
   ggplot(aes(x = rt, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   labs(
     title = "Posterior predictive check — Model 2",
-    x = "RT (ms)", y = "Density", fill = ""
+    x = "RT (ms)",
+    y = "Density",
+    fill = ""
   )
 ```
 
@@ -636,70 +665,73 @@ tibble(
 ### Prior-posterior comparison
 ```{r}
 n_post <- length(post2$a)
+
 prior_post2 <- tibble(
-  prior__a           = rnorm(n_post, 6.0, 0.5),
-  posterior__a       = post2$a,
-  prior__cong        = rnorm(n_post, 0, 0.5),
-  posterior__cong    = post2$b_cong,
-  prior__joint       = rnorm(n_post, 0, 0.5),
-  posterior__joint   = post2$b_joint,
-  prior__sync        = rnorm(n_post, 0, 0.5),
-  posterior__sync    = post2$b_sync,
-  prior__sigma       = rexp(n_post, 1),
-  posterior__sigma   = post2$sigma,
-  prior__sigma_pid   = rexp(n_post, 1),
-  posterior__sigma_pid  = post2$sigma_pid,
-  prior__sigma_dyad  = rexp(n_post, 1),
+  prior__a = rnorm(n_post, 6.1, .2),
+  posterior__a = post2$a,
+  prior__cong = rnorm(n_post, 0, .05),
+  posterior__cong = post2$b_cong,
+  prior__joint = rnorm(n_post, -.05, .05),
+  posterior__joint = post2$b_joint,
+  prior__sync = rnorm(n_post, 0, .05),
+  posterior__sync = post2$b_sync,
+  prior__sigma = rexp(n_post, 3),
+  posterior__sigma = post2$sigma,
+  prior__sigma_pid = rexp(n_post, 5),
+  posterior__sigma_pid = post2$sigma_pid,
+  prior__sigma_dyad = rexp(n_post, 5),
   posterior__sigma_dyad = post2$sigma_dyad
 ) |>
-  pivot_longer(everything(),
-               names_to  = c("source", "parameter"),
-               names_sep = "__")
+  pivot_longer(
+    everything(),
+    names_to = c("source", "parameter"),
+    names_sep = "__"
+  )
 
 zoom2 <- prior_post2 |>
   filter(source == "posterior") |>
   group_by(parameter) |>
-  summarise(xmin = quantile(value, 0.001),
-            xmax = quantile(value, 0.999))
+  summarise(xmin = quantile(value, 0.001), xmax = quantile(value, 0.999))
 
 prior_post2 |>
   left_join(zoom2, by = "parameter") |>
   filter(value >= xmin & value <= xmax) |>
   ggplot(aes(x = value, fill = source)) +
-  geom_density(alpha = 0.5) +
-  facet_wrap(~ parameter, scales = "free") +
+  geom_density(alpha = .5) +
+  facet_wrap(~parameter, scales = "free") +
   labs(
-    title = "Prior-posterior comparison — Model 2",
-    x = "", y = "Density", fill = ""
+    title = "Prior-posterior comparison - Model 2",
+    x = "",
+    y = "Density",
+    fill = ""
   )
 ```
 
 ## Model 3 - two-way interactions + varying intercepts
-### Data
 ### Prior predictive
 ```{r}
 n_post <- 2000
 
-prior_a              <- rnorm(n_post, 6.0, 0.5)
-prior_b_cong         <- rnorm(n_post, 0, 0.5)
-prior_b_joint        <- rnorm(n_post, 0, 0.5)
-prior_b_sync         <- rnorm(n_post, 0, 0.5)
-prior_b_cong_joint   <- rnorm(n_post, 0, 0.5)
-prior_b_cong_sync    <- rnorm(n_post, 0, 0.5)
-prior_b_joint_sync   <- rnorm(n_post, 0, 0.5)
-prior_sigma          <- rexp(n_post, 1)
-prior_sigma_pid      <- rexp(n_post, 1)
-prior_sigma_dyad     <- rexp(n_post, 1)
+prior_a <- rnorm(n_post, 6.1, .2)
+prior_b_cong <- rnorm(n_post, 0, .05)
+prior_b_joint <- rnorm(n_post, -.05, .05)
+prior_b_sync <- rnorm(n_post, 0, .05)
+prior_b_cong_joint <- rnorm(n_post, 0, .05)
+prior_b_cong_sync <- rnorm(n_post, 0, .05)
+prior_b_joint_sync <- rnorm(n_post, 0, .05)
+prior_sigma <- rexp(n_post, 3)
+prior_sigma_pid <- rexp(n_post, 5)
+prior_sigma_dyad <- rexp(n_post, 5)
 
-prior_u_pid  <- rnorm(n_post, 0, prior_sigma_pid)
+prior_u_pid <- rnorm(n_post, 0, prior_sigma_pid)
 prior_u_dyad <- rnorm(n_post, 0, prior_sigma_dyad)
 
 prior_mu <- prior_a +
-  prior_b_cong       * 1 +
-  prior_b_joint      * 1 +
-  prior_b_sync       * 1 +
+  prior_b_cong * 1 +
+  prior_b_joint * 1 +
+  prior_b_sync * 1 +
   prior_b_cong_joint * 1 * 1 +
-  prior_b_cong_sync  * 1 * 1 +
+  prior_b_cong_sync * 1 * 1 +
   prior_b_joint_sync * 1 * 1 +
   prior_u_pid +
   prior_u_dyad
@@ -709,14 +741,17 @@ prior_rt <- rlnorm(n_post, meanlog = prior_mu, sdlog = prior_sigma)
 tibble(rt = prior_rt) |>
   filter(rt < 5000) |>
   ggplot(aes(x = rt)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = c(150, 1800), linetype = "dashed", colour = "red") +
   labs(
-    title = "Prior predictive check — Model 3",
-    subtitle = "Red dashed lines: plausible RT range (150–1800 ms)",
-    x = "RT (ms)", y = "Density"
+    title = "Prior predictive check - Model 3",
+    subtitle = "Red dashed lines: plausible RT range (150-1800 ms)",
+    x = "RT (ms)",
+    y = "Density"
   )
 ```
+
+All three interactions centred at zero so that we presume no interactions unless the data says otherwise. SD of .05 matches the main effects, which is appropriate because interactions should be no larger in magnitude than the main effects themselves. 
 
 ### Model fit
 ```{r}
@@ -724,137 +759,147 @@ m3 <- ulam(
   alist(
     rt ~ dlnorm(mu, sigma),
     mu <- a +
-      b_cong         * congruent +
-      b_joint        * joint +
-      b_sync         * sync +
-      b_cong_joint   * congruent * joint +
-      b_cong_sync    * congruent * sync +
-      b_joint_sync   * joint * sync +
+      b_cong * congruent +
+      b_joint * joint +
+      b_sync * sync +
+      b_cong_joint * congruent * joint +
+      b_cong_sync * congruent * sync +
+      b_joint_sync * joint * sync +
       u_pid[pid] +
       u_dyad[dyad],
 
     # Fixed effects
-    a              ~ dnorm(6.0, 0.5),
-    b_cong         ~ dnorm(0, 0.5),
-    b_joint        ~ dnorm(0, 0.5),
-    b_sync         ~ dnorm(0, 0.5),
-    b_cong_joint   ~ dnorm(0, 0.5),
-    b_cong_sync    ~ dnorm(0, 0.5),
-    b_joint_sync   ~ dnorm(0, 0.5),
+    a ~ dnorm(6.1, .2),
+    b_cong ~ dnorm(0, .05),
+    b_joint ~ dnorm(-.05, .05),
+    b_sync ~ dnorm(0, .05),
+    b_cong_joint ~ dnorm(0, .05),
+    b_cong_sync ~ dnorm(0, .05),
+    b_joint_sync ~ dnorm(0, .05),
 
     # Varying intercepts
-    u_pid[pid]   ~ dnorm(0, sigma_pid),
+    u_pid[pid] ~ dnorm(0, sigma_pid),
     u_dyad[dyad] ~ dnorm(0, sigma_dyad),
 
     # Scale parameters
-    sigma      ~ dexp(1),
-    sigma_pid  ~ dexp(1),
-    sigma_dyad ~ dexp(1)
+    sigma ~ dexp(3),
+    sigma_pid ~ dexp(5),
+    sigma_dyad ~ dexp(5)
   ),
-  data = dat, chains = 4, cores = 4, log_lik = TRUE
+  data = dat,
+  chains = 4,
+  cores = 4,
+  log_lik = TRUE
 )
 ```
 
 ```{r}
-precis(m3, depth = 1)
+precis(m3)
 ```
 
 ### Posterior predictive check
 ```{r}
+post3 <- extract.samples(m3)
 rt_sim3 <- sim(m3)
 rt_ppc3 <- as.vector(rt_sim3)
 
 tibble(
-  rt     = c(dat$rt, rt_ppc3),
-  source = c(rep("Observed", length(dat$rt)),
-             rep("Posterior predictive", length(rt_ppc3)))
+  rt = c(dat$rt, rt_ppc3),
+  source = c(
+    rep("Observed", length(dat$rt)),
+    rep("Posterior predictive", length(rt_ppc3))
+  )
 ) |>
   filter(rt < 2000) |>
   ggplot(aes(x = rt, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   labs(
     title = "Posterior predictive check — Model 3",
-    x = "RT (ms)", y = "Density", fill = ""
+    x = "RT (ms)",
+    y = "Density",
+    fill = ""
   )
 ```
 
 ### Prior-posterior comparison
 ```{r}
-post3  <- extract.samples(m3)
+post3 <- extract.samples(m3)
 n_post <- length(post3$a)
 
 prior_post3 <- tibble(
-  prior__a                = rnorm(n_post, 6.0, 0.5),
-  posterior__a            = post3$a,
-  prior__cong             = rnorm(n_post, 0, 0.5),
-  posterior__cong         = post3$b_cong,
-  prior__joint            = rnorm(n_post, 0, 0.5),
-  posterior__joint        = post3$b_joint,
-  prior__sync             = rnorm(n_post, 0, 0.5),
-  posterior__sync         = post3$b_sync,
-  prior__cong_joint       = rnorm(n_post, 0, 0.5),
-  posterior__cong_joint   = post3$b_cong_joint,
-  prior__cong_sync        = rnorm(n_post, 0, 0.5),
-  posterior__cong_sync    = post3$b_cong_sync,
-  prior__joint_sync       = rnorm(n_post, 0, 0.5),
-  posterior__joint_sync   = post3$b_joint_sync,
-  prior__sigma            = rexp(n_post, 1),
-  posterior__sigma        = post3$sigma,
-  prior__sigma_pid        = rexp(n_post, 1),
-  posterior__sigma_pid    = post3$sigma_pid,
-  prior__sigma_dyad       = rexp(n_post, 1),
-  posterior__sigma_dyad   = post3$sigma_dyad
+  prior__a = rnorm(n_post, 6.1, .2),
+  posterior__a = post3$a,
+  prior__cong = rnorm(n_post, 0, .5),
+  posterior__cong = post3$b_cong,
+  prior__joint = rnorm(n_post, -.05, .05),
+  posterior__joint = post3$b_joint,
+  prior__sync = rnorm(n_post, 0, .05),
+  posterior__sync = post3$b_sync,
+  prior__cong_joint = rnorm(n_post, 0, .05),
+  posterior__cong_joint = post3$b_cong_joint,
+  prior__cong_sync = rnorm(n_post, 0, .05),
+  posterior__cong_sync = post3$b_cong_sync,
+  prior__joint_sync = rnorm(n_post, 0, .05),
+  posterior__joint_sync = post3$b_joint_sync,
+  prior__sigma = rexp(n_post, 3),
+  posterior__sigma = post3$sigma,
+  prior__sigma_pid = rexp(n_post, 5),
+  posterior__sigma_pid = post3$sigma_pid,
+  prior__sigma_dyad = rexp(n_post, 5),
+  posterior__sigma_dyad = post3$sigma_dyad
 ) |>
-  pivot_longer(everything(),
-               names_to  = c("source", "parameter"),
-               names_sep = "__")
+  pivot_longer(
+    everything(),
+    names_to = c("source", "parameter"),
+    names_sep = "__"
+  )
 
 zoom3 <- prior_post3 |>
   filter(source == "posterior") |>
   group_by(parameter) |>
-  summarise(xmin = quantile(value, 0.001),
-            xmax = quantile(value, 0.999))
+  summarise(xmin = quantile(value, 0.001), xmax = quantile(value, 0.999))
 
 prior_post3 |>
   left_join(zoom3, by = "parameter") |>
   filter(value >= xmin & value <= xmax) |>
   ggplot(aes(x = value, fill = source)) +
-  geom_density(alpha = 0.5) +
-  facet_wrap(~ parameter, scales = "free") +
+  geom_density(alpha = .5) +
+  facet_wrap(~parameter, scales = "free") +
   labs(
-    title = "Prior-posterior comparison — Model 3",
-    x = "", y = "Density", fill = ""
+    title = "Prior-posterior comparison - Model 3",
+    x = "",
+    y = "Density",
+    fill = ""
   )
 ```
 
-## Model 4 - the whole shebang!
-### Data
+## Model 4 - three-way interaction
 ### Prior predictive
 ```{r}
 n_post <- 2000
 
-prior__a                  <- rnorm(n_post, 6.0, 0.5)
-prior__cong               <- rnorm(n_post, 0, 0.5)
-prior__joint              <- rnorm(n_post, 0, 0.5)
-prior__sync               <- rnorm(n_post, 0, 0.5)
-prior__cong_joint         <- rnorm(n_post, 0, 0.5)
-prior__cong_sync          <- rnorm(n_post, 0, 0.5)
-prior__joint_sync         <- rnorm(n_post, 0, 0.5)
-prior__cong_joint_sync    <- rnorm(n_post, 0, 0.5)
-prior__sigma              <- rexp(n_post, 1)
-prior__sigma_pid          <- rexp(n_post, 1)
-prior__sigma_dyad         <- rexp(n_post, 1)
+prior__a <- rnorm(n_post, 6.1, .2)
+prior__cong <- rnorm(n_post, 0, .05)
+prior__joint <- rnorm(n_post, -.05, .05)
+prior__sync <- rnorm(n_post, 0, .05)
+prior__cong_joint <- rnorm(n_post, 0, .05)
+prior__cong_sync <- rnorm(n_post, 0, .05)
+prior__joint_sync <- rnorm(n_post, 0, .05)
+prior__cong_joint_sync <- rnorm(n_post, 0, .05)
+prior__sigma <- rexp(n_post, 3)
+prior__sigma_pid <- rexp(n_post, 5)
+prior__sigma_dyad <- rexp(n_post, 5)
 
-prior_u_pid  <- rnorm(n_post, 0, prior__sigma_pid)
+prior_u_pid <- rnorm(n_post, 0, prior__sigma_pid)
 prior_u_dyad <- rnorm(n_post, 0, prior__sigma_dyad)
 
 prior_mu <- prior__a +
-  prior__cong            * 1 +
-  prior__joint           * 1 +
-  prior__sync            * 1 +
-  prior__cong_joint      * 1 * 1 +
-  prior__cong_sync       * 1 * 1 +
-  prior__joint_sync      * 1 * 1 +
+  prior__cong * 1 +
+  prior__joint * 1 +
+  prior__sync * 1 +
+  prior__cong_joint * 1 * 1 +
+  prior__cong_sync * 1 * 1 +
+  prior__joint_sync * 1 * 1 +
   prior__cong_joint_sync * 1 * 1 * 1 +
   prior_u_pid +
   prior_u_dyad
@@ -864,12 +909,158 @@ prior_rt <- rlnorm(n_post, meanlog = prior_mu, sdlog = prior__sigma)
 tibble(rt = prior_rt) |>
   filter(rt < 5000) |>
   ggplot(aes(x = rt)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = c(150, 1800), linetype = "dashed", colour = "red") +
   labs(
-    title = "Prior predictive check — Model 4",
-    subtitle = "Red dashed lines: plausible RT range (150–1800 ms)",
-    x = "RT (ms)", y = "Density"
+    title = "Prior predictive check - Model 4",
+    subtitle = "Red dashed lines: plausible RT range (150-1800 ms)",
+    x = "RT (ms)",
+    y = "Density"
+  )
+```
+
+Our primary interest: whether synchrony modulates the SSE (the congruency x task-type interaction). Centred at 0 so as to be agnostic about direction. SD of .05 is consistent with all other interaction terms.
+
+### Parameter recovery check
+Since this is our main model, it makes sense to check whether it will even be allowed to pick up true signals in the data. Therefore, we simulate data with true effects to see if the model recovers these.
+
+```{r}
+# true parameter values
+true <- list(
+  a = 6.1,
+  b_cong = -.04,
+  b_joint = -.05,
+  b_sync = 0,
+  b_cong_joint = -.03,
+  b_cong_sync = 0,
+  b_joint_sync = 0,
+  b_cong_joint_sync = .1, # also tried .03 and 0
+  sigma = .33,
+  sigma_pid = .20,
+  sigma_dyad = .20
+)
+
+# simulate data
+set.seed(42)
+
+n_dyads <- 9
+n_pid <- n_dyads * 2 # 18 participants
+n_trials_individual <- 60 # per participant
+n_trials_joint <- 60 # per dyad (logged twice, once per participant)
+
+# Varying intercepts
+u_dyad <- rnorm(n_dyads, 0, true$sigma_dyad)
+u_pid <- rnorm(n_pid, 0, true$sigma_pid)
+
+# Build trial-level data frame
+sim_data <- expand_grid(
+  dyad_id = 1:n_dyads,
+  congruent = c(0, 1), # 0 = incongruent, 1 = congruent
+  joint = c(0, 1), # 0 = individual, 1 = joint
+  sync = c(0, 1) # 0 = async, 1 = sync
+) |>
+  # Each combination gets n_trials_individual/4 trials per participant
+  # (balanced: 2 congruency × 2 task × 2 sync levels --> 60/4 = 15 trials each)
+  slice(rep(1:n(), each = 15)) |>
+  mutate(
+    pid = if_else(
+      joint == 0,
+      (dyad_id - 1) * 2 + sample(1:2, n(), replace = TRUE),
+      (dyad_id - 1) * 2 + 1
+    ), # joint: attribute to P1 for simplicity
+    mu = true$a +
+      true$b_cong * congruent +
+      true$b_joint * joint +
+      true$b_sync * sync +
+      true$b_cong_joint * congruent * joint +
+      true$b_cong_sync * congruent * sync +
+      true$b_joint_sync * joint * sync +
+      true$b_cong_joint_sync * congruent * joint * sync +
+      u_pid[pid] +
+      u_dyad[dyad_id],
+    rt = rlnorm(n(), meanlog = mu, sdlog = true$sigma)
+  )
+
+# fit model
+m4_sim <- ulam(
+  alist(
+    rt ~ dlnorm(mu, sigma),
+    mu <- a +
+      b_cong * congruent +
+      b_joint * joint +
+      b_sync * sync +
+      b_cong_joint * congruent * joint +
+      b_cong_sync * congruent * sync +
+      b_joint_sync * joint * sync +
+      b_cong_joint_sync * congruent * joint * sync +
+      u_pid[pid] +
+      u_dyad[dyad_id],
+    # Fixed effects
+    a ~ dnorm(6.1, .2),
+    b_cong ~ dnorm(0, .05),
+    b_joint ~ dnorm(-.05, .05),
+    b_sync ~ dnorm(0, .05),
+    b_cong_joint ~ dnorm(0, .05),
+    b_cong_sync ~ dnorm(0, .05),
+    b_joint_sync ~ dnorm(0, .05),
+    b_cong_joint_sync ~ dnorm(0, .05),
+    # Residual
+    sigma ~ dexp(3),
+    # Random intercepts
+    u_pid[pid] ~ dnorm(0, sigma_pid),
+    u_dyad[dyad_id] ~ dnorm(0, sigma_dyad),
+    sigma_pid ~ dexp(5),
+    sigma_dyad ~ dexp(5)
+  ),
+  data = sim_data |>
+    select(rt, congruent, joint, sync, pid, dyad_id) |>
+    as.list(),
+  chains = 4,
+  cores = 4,
+  iter = 2000,
+  warmup = 500
+)
+
+# recovery check
+post <- extract.samples(m4_sim)
+
+focal_params <- c(
+  "a",
+  "b_cong",
+  "b_joint",
+  "b_sync",
+  "b_cong_joint",
+  "b_cong_sync",
+  "b_joint_sync",
+  "b_cong_joint_sync"
+)
+
+recovery <- map_dfr(focal_params, function(p) {
+  samples <- post[[p]]
+  tibble(
+    param = p,
+    true_val = true[[p]],
+    mean = mean(samples),
+    lower89 = quantile(samples, .055),
+    upper89 = quantile(samples, .945),
+    recovered = true[[p]] >= quantile(samples, .055) &
+      true[[p]] <= quantile(samples, .945)
+  )
+})
+
+print(recovery)
+
+# Plot
+recovery |>
+  ggplot(aes(x = param, y = mean, ymin = lower89, ymax = upper89)) +
+  geom_pointrange() +
+  geom_point(aes(y = true_val), colour = "red", size = 3, shape = 4) +
+  coord_flip() +
+  labs(
+    title = "Parameter recovery — Model 4",
+    subtitle = "Black: posterior mean + 89 % CI. Red cross: true value.",
+    x = NULL,
+    y = "Estimate (log scale)"
   )
 ```
 
@@ -879,36 +1070,39 @@ m4 <- ulam(
   alist(
     rt ~ dlnorm(mu, sigma),
     mu <- a +
-      b_cong            * congruent +
-      b_joint           * joint +
-      b_sync            * sync +
-      b_cong_joint      * congruent * joint +
-      b_cong_sync       * congruent * sync +
-      b_joint_sync      * joint * sync +
+      b_cong * congruent +
+      b_joint * joint +
+      b_sync * sync +
+      b_cong_joint * congruent * joint +
+      b_cong_sync * congruent * sync +
+      b_joint_sync * joint * sync +
       b_cong_joint_sync * congruent * joint * sync +
       u_pid[pid] +
       u_dyad[dyad],
 
     # Fixed effects
-    a                 ~ dnorm(6.0, 0.5),
-    b_cong            ~ dnorm(0, 0.5),
-    b_joint           ~ dnorm(0, 0.5),
-    b_sync            ~ dnorm(0, 0.5),
-    b_cong_joint      ~ dnorm(0, 0.5),
-    b_cong_sync       ~ dnorm(0, 0.5),
-    b_joint_sync      ~ dnorm(0, 0.5),
-    b_cong_joint_sync ~ dnorm(0, 0.5),
+    a ~ dnorm(6.1, .2),
+    b_cong ~ dnorm(0, .05),
+    b_joint ~ dnorm(-.05, .05),
+    b_sync ~ dnorm(0, .05),
+    b_cong_joint ~ dnorm(0, .05),
+    b_cong_sync ~ dnorm(0, .05),
+    b_joint_sync ~ dnorm(0, .05),
+    b_cong_joint_sync ~ dnorm(0, .05),
 
     # Varying intercepts
-    u_pid[pid]   ~ dnorm(0, sigma_pid),
+    u_pid[pid] ~ dnorm(0, sigma_pid),
     u_dyad[dyad] ~ dnorm(0, sigma_dyad),
 
     # Scale parameters
-    sigma      ~ dexp(1),
-    sigma_pid  ~ dexp(1),
-    sigma_dyad ~ dexp(1)
+    sigma ~ dexp(3),
+    sigma_pid ~ dexp(5),
+    sigma_dyad ~ dexp(5)
   ),
-  data = dat, chains = 4, cores = 4, log_lik = TRUE
+  data = dat,
+  chains = 4,
+  cores = 4,
+  log_lik = TRUE
 )
 ```
 
@@ -918,6 +1112,7 @@ precis(m4, depth = 1)
 
 ### Posterior predictive check
 ```{r}
+post4 <- extract.samples(m4)
 rt_sim4 <- sim(m4)
 rt_ppc4 <- as.vector(rt_sim4)
 
@@ -928,7 +1123,7 @@ tibble(
 ) |>
   filter(rt < 2000) |>
   ggplot(aes(x = rt, fill = source)) +
-  geom_density(alpha = 0.5) +
+  geom_density(alpha = .5) +
   labs(
     title = "Posterior predictive check — Model 4",
     x = "RT (ms)", y = "Density", fill = ""
@@ -937,52 +1132,54 @@ tibble(
 
 ### Prior-posterior comparison
 ```{r}
-post4  <- extract.samples(m4)
 n_post <- length(post4$a)
 
 prior_post4 <- tibble(
-  prior__a                  = rnorm(n_post, 6.0, 0.5),
-  posterior__a              = post4$a,
-  prior__cong               = rnorm(n_post, 0, 0.5),
-  posterior__cong           = post4$b_cong,
-  prior__joint              = rnorm(n_post, 0, 0.5),
-  posterior__joint          = post4$b_joint,
-  prior__sync               = rnorm(n_post, 0, 0.5),
-  posterior__sync           = post4$b_sync,
-  prior__cong_joint         = rnorm(n_post, 0, 0.5),
-  posterior__cong_joint     = post4$b_cong_joint,
-  prior__cong_sync          = rnorm(n_post, 0, 0.5),
-  posterior__cong_sync      = post4$b_cong_sync,
-  prior__joint_sync         = rnorm(n_post, 0, 0.5),
-  posterior__joint_sync     = post4$b_joint_sync,
-  prior__cong_joint_sync    = rnorm(n_post, 0, 0.5),
+  prior__a = rnorm(n_post, 6.1, .2),
+  posterior__a = post4$a,
+  prior__cong = rnorm(n_post, 0, .05),
+  posterior__cong = post4$b_cong,
+  prior__joint = rnorm(n_post, -.05, .05),
+  posterior__joint = post4$b_joint,
+  prior__sync = rnorm(n_post, 0, .05),
+  posterior__sync = post4$b_sync,
+  prior__cong_joint = rnorm(n_post, 0, .05),
+  posterior__cong_joint = post4$b_cong_joint,
+  prior__cong_sync = rnorm(n_post, 0, .05),
+  posterior__cong_sync = post4$b_cong_sync,
+  prior__joint_sync = rnorm(n_post, 0, .05),
+  posterior__joint_sync = post4$b_joint_sync,
+  prior__cong_joint_sync = rnorm(n_post, 0, .05),
   posterior__cong_joint_sync = post4$b_cong_joint_sync,
-  prior__sigma              = rexp(n_post, 1),
-  posterior__sigma          = post4$sigma,
-  prior__sigma_pid          = rexp(n_post, 1),
-  posterior__sigma_pid      = post4$sigma_pid,
-  prior__sigma_dyad         = rexp(n_post, 1),
-  posterior__sigma_dyad     = post4$sigma_dyad
+  prior__sigma = rexp(n_post, 3),
+  posterior__sigma = post4$sigma,
+  prior__sigma_pid = rexp(n_post, 5),
+  posterior__sigma_pid = post4$sigma_pid,
+  prior__sigma_dyad = rexp(n_post, 5),
+  posterior__sigma_dyad = post4$sigma_dyad
 ) |>
-  pivot_longer(everything(),
-               names_to  = c("source", "parameter"),
-               names_sep = "__")
+  pivot_longer(
+    everything(),
+    names_to = c("source", "parameter"),
+    names_sep = "__"
+  )
 
 zoom4 <- prior_post4 |>
   filter(source == "posterior") |>
   group_by(parameter) |>
-  summarise(xmin = quantile(value, 0.001),
-            xmax = quantile(value, 0.999))
+  summarise(xmin = quantile(value, 0.001), xmax = quantile(value, 0.999))
 
 prior_post4 |>
   left_join(zoom4, by = "parameter") |>
   filter(value >= xmin & value <= xmax) |>
   ggplot(aes(x = value, fill = source)) +
-  geom_density(alpha = 0.5) +
-  facet_wrap(~ parameter, scales = "free") +
+  geom_density(alpha = .5) +
+  facet_wrap(~parameter, scales = "free") +
   labs(
-    title = "Prior-posterior comparison — Model 4",
-    x = "", y = "Density", fill = ""
+    title = "Prior-posterior comparison - Model 4",
+    x = "",
+    y = "Density",
+    fill = ""
   )
 ```
 ## Model comparison
@@ -992,71 +1189,31 @@ comparison
 plot(comparison)
 ```
 
-M3 and M4 are essentially equivalent — dWAIC of 2.0 with a dSE of 0.71 means the difference is real but trivially small. The model weights reflect this: 0.73 vs 0.27. Adding the three-way interaction (M4) does not meaningfully improve predictive accuracy over the two-way interaction model (M3).
-M2 is clearly worse than M3/M4 — dWAIC of 14.6 with dSE of 8.98 suggests the two-way interactions are earning their place. The data support including them.
-M1 and M0 are far behind — the large dWAIC values confirm that both the fixed effects and the varying intercepts are doing real work.
-The pWAIC column is worth noting: M3 has 23.5 effective parameters and M4 has 24.4 — only about 1 effective parameter difference despite adding a full interaction term. This suggests the three-way interaction is not being constrained much by the data, consistent with the wide posterior we saw.
-Practical conclusion: M3 is your best model by WAIC. M4 is your theoretically motivated model but adds no predictive value. This is a meaningful result in itself — you can report that the three-way interaction does not improve model fit, and connect that to the wide posterior and small sample as converging evidence that the data are insufficient to estimate the effect of synchrony on the SSE.
-
-## Posterior estimates of m4
-```{r}
-# Extract samples
-post4 <- extract.samples(m4)
-
-# Key parameters: mean, SD, and 89% credible interval
-
-params <- c(
-  "b_cong",
-  "b_joint",
-  "b_sync",
-  "b_cong_joint",
-  "b_cong_sync",
-  "b_joint_sync",
-  "b_cong_joint_sync"
-)
-
-posterior_summary <- map_dfr(params, function(p) {
-  samples <- post4[[p]]
-  tibble(
-    parameter = p,
-    mean = mean(samples),
-    sd = sd(samples),
-    lower_89 = quantile(samples, 0.055),
-    upper_89 = quantile(samples, 0.945)
-  )
-})
-
-posterior_summary
-```
-
-Remember this is in log-RT. 
-
-b_cong_joint (-0.057, 89% CI [-0.107, -0.006]): This is the SSE — the congruency effect is more negative in the joint task than the individual task. CI excludes zero, so there is credible evidence for the SSE in the asynchrony condition. The negative sign means incongruent trials are slower relative to congruent in the joint task.
-b_cong_sync (0.030, 89% CI [-0.016, 0.077]): Weak suggestion that the congruency effect differs slightly by condition in the individual task. CI includes zero.
-
-b_cong_joint_sync (-0.014, 89% CI [-0.082, 0.050]): The SSE does not credibly differ between synchrony and asynchrony conditions. The mean is slightly negative — suggesting the SSE might be marginally smaller in the synchrony condition — but the CI is wide and comfortably includes zero. This is your main null result.
-
 ## Contrasts - SSE by condition
 ### On log scale
 ```{r}
 # SSE in each condition (on log-RT scale)
 SSE_async <- post4$b_cong_joint
-SSE_sync  <- post4$b_cong_joint + post4$b_cong_joint_sync
+SSE_sync <- post4$b_cong_joint + post4$b_cong_joint_sync
 
 # Contrast: difference in SSE between conditions
 SSE_contrast <- SSE_sync - SSE_async
 
 # Summarise
 contrast_summary <- tibble(
-  parameter     = c("SSE_async", "SSE_sync", "SSE_contrast"),
-  mean          = c(mean(SSE_async), mean(SSE_sync), mean(SSE_contrast)),
-  sd            = c(sd(SSE_async), sd(SSE_sync), sd(SSE_contrast)),
-  lower_89      = c(quantile(SSE_async, 0.055),
-                    quantile(SSE_sync,  0.055),
-                    quantile(SSE_contrast, 0.055)),
-  upper_89      = c(quantile(SSE_async, 0.945),
-                    quantile(SSE_sync,  0.945),
-                    quantile(SSE_contrast, 0.945))
+  parameter = c("SSE_async", "SSE_sync", "SSE_contrast"),
+  mean = c(mean(SSE_async), mean(SSE_sync), mean(SSE_contrast)),
+  sd = c(sd(SSE_async), sd(SSE_sync), sd(SSE_contrast)),
+  lower_89 = c(
+    quantile(SSE_async, .055),
+    quantile(SSE_sync, .055),
+    quantile(SSE_contrast, .055)
+  ),
+  upper_89 = c(
+    quantile(SSE_async, .945),
+    quantile(SSE_sync, .945),
+    quantile(SSE_contrast, .945)
+  )
 )
 
 contrast_summary
@@ -1064,20 +1221,15 @@ contrast_summary
 # Plot contrast distribution
 tibble(contrast = SSE_contrast) |>
   ggplot(aes(x = contrast)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
   labs(
     title = "Posterior contrast: SSE synchrony vs. asynchrony",
     subtitle = "Negative = smaller SSE in synchrony condition",
-    x = "SSE_sync - SSE_async (log-RT scale)", y = "Density"
+    x = "SSE_sync - SSE_async (log-RT scale)",
+    y = "Density"
   )
 ```
-
-SSE_async (-0.057, 89% CI [-0.107, -0.006]): The SSE is credibly present in the asynchrony condition — the CI excludes zero. Incongruent trials are slower than congruent in the joint task relative to the individual task.
-SSE_sync (-0.070, 89% CI [-0.113, -0.028]): The SSE is also credibly present in the synchrony condition, and actually slightly larger in magnitude than in the asynchrony condition. CI excludes zero more cleanly here.
-SSE_contrast (-0.014, 89% CI [-0.082, 0.050]): The difference between conditions is negligible and highly uncertain. The CI straddles zero almost symmetrically, and the plot shows a distribution centered essentially on zero with substantial spread in both directions. There is no credible evidence that synchrony modulates the size of the SSE.
-The plot tells the same story cleanly — the posterior contrast is centered just left of zero with a long, roughly symmetric spread. Most of the mass is between -0.10 and +0.05, which on the log-RT scale is a very small range.
-Summary for your paper: Both conditions show a credible SSE, but the contrast between them is not credibly different from zero. This is a clean null result on the primary hypothesis, with the honest caveat that the sample size gives very little power to detect a difference at the dyad level.
 
 ### Transformed to ms scale
 ```{r}
@@ -1086,19 +1238,23 @@ baseline <- exp(post4$a)
 
 # SSE in each condition: exp(a + SSE) - exp(a)
 SSE_async_ms <- exp(post4$a + SSE_async) - baseline
-SSE_sync_ms  <- exp(post4$a + SSE_sync)  - baseline
+SSE_sync_ms <- exp(post4$a + SSE_sync) - baseline
 SSE_contrast_ms <- SSE_sync_ms - SSE_async_ms
 
 ms_summary <- tibble(
   parameter = c("SSE_async_ms", "SSE_sync_ms", "SSE_contrast_ms"),
-  mean      = c(mean(SSE_async_ms), mean(SSE_sync_ms), mean(SSE_contrast_ms)),
-  sd        = c(sd(SSE_async_ms), sd(SSE_sync_ms), sd(SSE_contrast_ms)),
-  lower_89  = c(quantile(SSE_async_ms, 0.055),
-                quantile(SSE_sync_ms,  0.055),
-                quantile(SSE_contrast_ms, 0.055)),
-  upper_89  = c(quantile(SSE_async_ms, 0.945),
-                quantile(SSE_sync_ms,  0.945),
-                quantile(SSE_contrast_ms, 0.945))
+  mean = c(mean(SSE_async_ms), mean(SSE_sync_ms), mean(SSE_contrast_ms)),
+  sd = c(sd(SSE_async_ms), sd(SSE_sync_ms), sd(SSE_contrast_ms)),
+  lower_89 = c(
+    quantile(SSE_async_ms, .055),
+    quantile(SSE_sync_ms, .055),
+    quantile(SSE_contrast_ms, .055)
+  ),
+  upper_89 = c(
+    quantile(SSE_async_ms, .945),
+    quantile(SSE_sync_ms, .945),
+    quantile(SSE_contrast_ms, .945)
+  )
 )
 
 ms_summary
@@ -1106,19 +1262,89 @@ ms_summary
 # Plot contrast in ms
 tibble(contrast_ms = SSE_contrast_ms) |>
   ggplot(aes(x = contrast_ms)) +
-  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_density(fill = color1, alpha = .5) +
   geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
   labs(
     title = "Posterior contrast: SSE synchrony vs. asynchrony (ms)",
     subtitle = "Negative = smaller SSE in synchrony condition",
-    x = "SSE_sync - SSE_async (ms)", y = "Density"
+    x = "SSE_sync - SSE_async (ms)",
+    y = "Density"
   )
 ```
 
-SSE_async (-19.9 ms, 89% CI [-36.8, -2.2]): A credible SSE of roughly 20 ms in the asynchrony condition — incongruent trials are about 20 ms slower than congruent in the joint task relative to the individual task. CI excludes zero.
-SSE_sync (-24.9 ms, 89% CI [-40.1, -10.2]): A credible SSE of roughly 25 ms in the synchrony condition. Actually slightly larger in magnitude than the asynchrony condition, and estimated more precisely — CI excludes zero more cleanly.
-SSE_contrast (-4.9 ms, 89% CI [-28.6, 17.3]): The difference between conditions is tiny and completely uncertain. The CI spans roughly 46 ms and straddles zero almost symmetrically. The plot confirms this — a broad, roughly symmetric distribution centered just left of zero.
-For your results section, these are the numbers to report. The story is:
+## Final model plots
+`b_cong_joint`: Is there an SSE at all? I.e., does congruency matter more in the joint task than the individual task?
 
-The SSE was present in both conditions, with posterior means of approximately 20 ms (asynchrony) and 25 ms (synchrony)
-The contrast between conditions was -4.9 ms (89% CI [-28.6, 17.3]), providing no credible evidence that interpersonal synchrony modulated the size of the SSE
+`b_cong_joint_sync`: Does synchrony modulate the SSE? 
+
+Plotting these two posteriors side by side lets the reader see both answers simultaneously and in relation to each other.
+```{r}
+tibble(
+  Asynchrony = SSE_async_ms,
+  Synchrony  = SSE_sync_ms,
+  Contrast   = SSE_contrast_ms
+) |>
+  pivot_longer(everything(), names_to = "parameter", values_to = "value") |>
+  mutate(
+    parameter = factor(
+      parameter,
+      levels = c("Asynchrony", "Synchrony", "Contrast"),
+      labels = c(
+        "SSE — Asynchrony\n(incongruent − congruent, ms)",
+        "SSE — Synchrony\n(incongruent − congruent, ms)",
+        "Contrast: synchrony − asynchrony\n(difference of SSEs, ms)"
+      )
+    )
+  ) |>
+  ggplot(aes(x = value, fill = parameter)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey30") +
+  facet_wrap(~ parameter, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = c(color1, color2, color3)) +
+  labs(
+    title    = "Posterior distributions of the Social Simon Effect",
+    subtitle = "Dashed line: zero. Negative SSE = congruent faster (expected direction).\nNegative contrast = smaller SSE in synchrony condition.",
+    x        = "ms",
+    y        = "Density"
+  ) +
+  theme(legend.position = "none")
+```
+
+```{r}
+mean(SSE_contrast_ms < 0)
+```
+```{r}
+# SSE in each condition
+p_sse <- tibble(
+  Asynchrony = SSE_async_ms,
+  Synchrony  = SSE_sync_ms
+) |>
+  pivot_longer(everything(), names_to = "condition", values_to = "value") |>
+  mutate(condition = factor(condition, levels = c("Asynchrony", "Synchrony"))) |>
+  ggplot(aes(x = value, fill = condition)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey30") +
+  scale_fill_manual(values = c(color1, color2)) +
+  labs(
+    title    = "Social Simon Effect by synchrony condition",
+    subtitle = "Negative = congruent faster (expected SSE direction)",
+    x        = "Incongruent − congruent (ms)",
+    y        = "Density",
+    fill     = ""
+  )
+
+# contrast
+p_contrast <- tibble(contrast = SSE_contrast_ms) |>
+  ggplot(aes(x = contrast)) +
+  geom_density(fill = color3, alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey30") +
+  labs(
+    title    = "Difference in SSE between conditions",
+    subtitle = "Negative = smaller SSE in synchrony condition",
+    x        = "SSE(synchrony) − SSE(asynchrony) (ms)",
+    y        = "Density"
+  )
+
+p_sse / p_contrast
+```
+
