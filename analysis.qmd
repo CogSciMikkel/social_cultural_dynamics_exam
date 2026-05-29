@@ -9,16 +9,13 @@ format: html
 # Packages
 library(rethinking)
 library(patchwork)
-library(dagitty)
 library(tidyverse)
 library(kableExtra)
 
 # Theme settings
 theme_set(theme_minimal())
-color1 <- "steelblue"
-color2 <- "tomato"
-color3 <- "mediumpurple"
-
+color1 <- "#564787"
+color2 <- "#F3C969"
 
 # data directory
 source("data_dir.R")
@@ -426,7 +423,8 @@ m0 <- ulam(
   data = dat,
   chains = 4,
   cores = 4,
-  log_lik = TRUE
+  log_lik = TRUE,
+  seed = 42
 )
 ```
 
@@ -546,7 +544,8 @@ m1 <- ulam(
   data = dat,
   chains = 4,
   cores = 4,
-  log_lik = TRUE
+  log_lik = TRUE,
+  seed = 42
 )
 ```
 
@@ -690,7 +689,8 @@ m2 <- ulam(
   data = dat,
   chains = 4,
   cores = 4,
-  log_lik = TRUE
+  log_lik = TRUE,
+  seed = 42
 )
 ```
 
@@ -849,7 +849,8 @@ m3 <- ulam(
   data = dat,
   chains = 4,
   cores = 4,
-  log_lik = TRUE
+  log_lik = TRUE,
+  seed = 42
 )
 ```
 
@@ -1019,7 +1020,8 @@ m4 <- ulam(
   data = dat,
   chains = 4,
   cores = 4,
-  log_lik = TRUE
+  log_lik = TRUE,
+  seed = 42
 )
 ```
 
@@ -1150,7 +1152,8 @@ prior_post4 |>
 # Model comparison
 ```{r}
 comparison <- compare(m0, m1, m2, m3, m4)
-comparison
+
+print(comparison)
 plot(comparison)
 ```
 
@@ -1304,7 +1307,8 @@ m4_wide <- ulam(
   data = dat,
   chains = 4,
   cores = 4,
-  log_lik = TRUE
+  log_lik = TRUE,
+  seed = 42
 )
 ```
 
@@ -1356,7 +1360,6 @@ table3_wide <- m4_wide_precis |>
   pack_rows("Fixed effects", 1, 8) |>
   pack_rows("Variance components", 9, 11)
 
-table3
 table3_wide
 ```
 
@@ -1638,7 +1641,8 @@ m4_sim <- ulam(
   chains = 4,
   cores = 4,
   iter = 2000,
-  warmup = 500
+  warmup = 500,
+  seed = 42
 )
 
 # recovery check
